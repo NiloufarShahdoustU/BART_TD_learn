@@ -17,6 +17,8 @@ function [TDdataGradients,outcomeData,cueData,outcomeAndCueHGs] = BART_bankpop_b
 %   The fourth input argument is a boolean, and specifies whether to
 %   plot all significant electrodes. (default: false)
 
+warning('off','all');
+
 set(0,'defaultfigurerender','painters'); % making sure we can edit figures after saving.
 
 if nargin < 2 || isempty(whichTrialsLM)
@@ -186,11 +188,25 @@ bP_outcome = [-0.7 -0.2]; % one second, starting a second and a half before the 
 bP_cue = [-0.11 -0.01]; % one second, starting a second and a half before the cue
 
 baselineNorm = true;
+useLogBaselineNorm = true;
 
-
+% FIX FOR UNSTABLE NEURAL FITS / EDGE ALPHAS:
+% Raw post/baseline ratios are strictly positive and can be very skewed.
+% log(post/base) gives a more symmetric neural response: 0 means no change
+% from baseline, positive means HG increase, negative means HG decrease.
 if baselineNorm
-    outcomeData = squeeze(mean(HGmat_outcome(:,tSec > startAnalysis_outcome & tSec < endAnalysis_outcome,:),2))./squeeze(mean(HGmat_outcome(:,tSec > bP_outcome(1) & tSec < bP_outcome(2),:),2));
-    cueData = squeeze(mean(HGmat_cue(:,tSec > startAnalysis_cue & tSec < endAnalysis_cue,:),2))./squeeze(mean(HGmat_cue(:,tSec > bP_cue(1) & tSec < bP_cue(2),:),2));
+    outcomePost = squeeze(mean(HGmat_outcome(:,tSec > startAnalysis_outcome & tSec < endAnalysis_outcome,:),2));
+    outcomeBase = squeeze(mean(HGmat_outcome(:,tSec > bP_outcome(1) & tSec < bP_outcome(2),:),2));
+    cuePost = squeeze(mean(HGmat_cue(:,tSec > startAnalysis_cue & tSec < endAnalysis_cue,:),2));
+    cueBase = squeeze(mean(HGmat_cue(:,tSec > bP_cue(1) & tSec < bP_cue(2),:),2));
+
+    if useLogBaselineNorm
+        outcomeData = log(outcomePost + eps) - log(outcomeBase + eps);
+        cueData = log(cuePost + eps) - log(cueBase + eps);
+    else
+        outcomeData = outcomePost ./ (outcomeBase + eps);
+        cueData = cuePost ./ (cueBase + eps);
+    end
 else
     outcomeData = squeeze(mean(HGmat_outcome(:,tSec > startAnalysis_outcome & tSec < endAnalysis_outcome,:),2));
     cueData = squeeze(mean(HGmat_cue(:,tSec > startAnalysis_cue & tSec < endAnalysis_cue,:),2));

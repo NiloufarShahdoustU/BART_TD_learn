@@ -19,7 +19,7 @@ function batchAnalyzeBART_v2_asymmetric_popCTRL_update_fast(analysis)
 %Edited: RC20220215
 
 close all;
-
+warning('off','all');
 sigBHFEEGcorr = struct();
 unitIDs_Pts = {};
 clusterTbl = [];
@@ -167,7 +167,7 @@ for pt = fliplr(pts)
     end
 end
 
-% keyboard % just want to run TDdata not rest of analysis.
+keyboard % just want to run TDdata not rest of analysis.
 
 % ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 % ^^^^^^^^^^^^^^^^^^^^^^^^^^^ WITHIN SUBJECT ANALYSES ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -1450,7 +1450,13 @@ load('riskSensitivity_TD_bhv.mat'); % to get RSTDmetric from behavior
     RSTD_metric_PE_neural_expanded = cell(nPts, maxLength);
     RSTD_metric_PE_neural_NORM_expanded = cell(nPts, maxLength);
     for k = 1:nPts
-        currLen = length(max_positivePE(k));
+        % FIX: use the content of the cell, not the cell container itself.
+        % max_positivePE(k) has length 1 for every patient; max_positivePE{k}
+        % has the actual number of channels/electrodes for that patient.
+        if isempty(max_positivePE{k})
+            continue
+        end
+        currLen = length(max_positivePE{k});
         for j = 1:currLen
             max_positiveVE_expanded{k, j}      = max_positiveVE{k}(j);
             rstd_positiveVE_Index_expanded{k, j} = rstd_positiveVE_Index{k}(j);
@@ -1467,8 +1473,9 @@ load('riskSensitivity_TD_bhv.mat'); % to get RSTDmetric from behavior
             rstd_negativePE_Index_expanded{k, j} = rstd_negativePE_Index{k}(j);
             rstd_positivePE_expanded{k, j}     = rstd_positivePE{k}(j);
             rstd_negativePE_expanded{k, j}     = rstd_negativePE{k}(j);
-            RSTD_metric_PE_neural_expanded{k, j}  = RSTD_metric_VE_neural{k}(j);
-            RSTD_metric_PE_neural_NORM_expanded{k, j}  = RSTD_metric_VE_neural_NORM{k}(j);
+            % FIX: PE summary must use PE metric, not VE metric.
+            RSTD_metric_PE_neural_expanded{k, j}  = RSTD_metric_PE_neural{k}(j);
+            RSTD_metric_PE_neural_NORM_expanded{k, j}  = RSTD_metric_PE_neural_NORM{k}(j);
         end
     end
 
@@ -1494,7 +1501,8 @@ load('riskSensitivity_TD_bhv.mat'); % to get RSTDmetric from behavior
     % drop empties from these columns....
     max_positiveVE_long = max_positiveVE_long(~cellfun('isempty', max_positiveVE_long));
     rstd_positiveVE_Index_long = rstd_positiveVE_Index_long(~cellfun('isempty', rstd_positiveVE_Index_long));
-    max_negativePE_long = max_negativeVE_long(~cellfun('isempty', max_negativeVE_long));
+    % FIX: this is the VE cleanup line, so keep it in the VE variable.
+    max_negativeVE_long = max_negativeVE_long(~cellfun('isempty', max_negativeVE_long));
     rstd_negativeVE_Index_long = rstd_negativeVE_Index_long(~cellfun('isempty', rstd_negativeVE_Index_long));
     rstd_positiveVE_long = rstd_positiveVE_long(~cellfun('isempty', rstd_positiveVE_long));
     rstd_negativeVE_long = rstd_negativeVE_long(~cellfun('isempty', rstd_negativeVE_long));
@@ -1517,10 +1525,11 @@ load('riskSensitivity_TD_bhv.mat'); % to get RSTDmetric from behavior
     zero_PE_indices_NORM = (RSTD_metric_PE_neural_NORM_long == 0);
 
     % Extract corresponding values from the other two variables
-    rstd_VE_zeros = [rstd_positiveVE_long(zero_PE_indices), rstd_negativePE_long(zero_PE_indices)];
-    rstd_VE_zeros_NORM = [rstd_positivePE_long(zero_PE_indices), rstd_negativePE_long(zero_PE_indices)];
+    % FIX: VE zero rows should use VE indices/VE alphas; PE zero rows should use PE indices/PE alphas.
+    rstd_VE_zeros = [rstd_positiveVE_long(zero_VE_indices), rstd_negativeVE_long(zero_VE_indices)];
+    rstd_VE_zeros_NORM = [rstd_positiveVE_long(zero_VE_indices_NORM), rstd_negativeVE_long(zero_VE_indices_NORM)];
     rstd_PE_zeros = [rstd_positivePE_long(zero_PE_indices), rstd_negativePE_long(zero_PE_indices)];
-    rstd_PE_zeros_NORM = [rstd_positivePE_long(zero_PE_indices), rstd_negativePE_long(zero_PE_indices)];
+    rstd_PE_zeros_NORM = [rstd_positivePE_long(zero_PE_indices_NORM), rstd_negativePE_long(zero_PE_indices_NORM)];
 
     %% ~~~~~~~~~~~~~~~~~~~~~~~~~ DATA ANALYSIS ~~~~~~~~~~~~~~~~~~~~~~~ %%
 

@@ -18,7 +18,7 @@ function [TDdataGradients] = TDlearn_rstd_Gradients(ptID,outcomeData,cueData,LMt
 % author: EHS20201102
 % Fixed version: no local/subfunctions, to avoid MATLAB parser issues.
 % Visualization section is intentionally kept unchanged.
-
+warning('off','all');
 if nargin < 3
     error('function requires data')
 end
@@ -171,13 +171,110 @@ TDdataGradients.nTrials = nTrials;
 pointsPerTrial = diff([0 [dataBHV.score]]); 
 
 %% now fitting risk-sensitive (asymmetric) models.
-TDdataGradients.a = TDdataParamRecovery.a;
-a = TDdataParamRecovery.a;
+TDdataGradients.a = TDdataParamRecovery.a(:)';
+a = TDdataGradients.a;
 TDdataGradients.inverseTemperatureRSTD = TDdataParamRecovery.inverseTemperatureRSTD;
 TDdataGradients.rstdV = TDdataParamRecovery.expectedReward;
 TDdataGradients.rstdRPE = TDdataParamRecovery.RPE;
-TDdataGradients.positiveBetaMaxIdx = TDdataParamRecovery.bestApIdx;
-TDdataGradients.negativeBetaMaxIdx = TDdataParamRecovery.bestAnIdx;
+
+% -------------------------------------------------------------------------
+% FIX FOR BOUNDARY ALPHAS
+% -------------------------------------------------------------------------
+% Problem: TDdataParamRecovery.bestApIdx/bestAnIdx can land on the edge of
+% the alpha grid (near 0 or 1). If we copy those directly into neural
+% modeling, all downstream neural summaries inherit boundary alphas even
+% when the likelihood surface is flat/noisy.
+%
+% Fix: choose the final alpha pair from the behavioral fit landscape after:
+%   1) excluding extreme grid edges, and
+%   2) adding a weak Beta(2,2)-like prior that favors identifiable interior
+%      solutions without changing the TD trajectories themselves.
+%
+% This keeps the neural test non-circular: neural activity is NOT used to
+% choose the final alpha pair used for the ANOVA models.
+rawBestAp = TDdataParamRecovery.bestApIdx;
+rawBestAn = TDdataParamRecovery.bestAnIdx;
+rawBestAp = max(1,min(numel(a),rawBestAp));
+rawBestAn = max(1,min(numel(a),rawBestAn));
+
+alphaLowerBound = 0.05;     % change to 0.10 if you want stricter trimming
+alphaUpperBound = 0.95;     % change to 0.90 if you want stricter trimming
+alphaPriorStrength = 3;     % 0 = only trim edges; higher = stronger interior pull
+
+alphaInteriorMask = (a >= alphaLowerBound) & (a <= alphaUpperBound);
+if sum(alphaInteriorMask) < 2
+    warning('Alpha grid has too few values inside [%.2f %.2f]. Using full grid.', alphaLowerBound, alphaUpperBound);
+    alphaInteriorMask = true(size(a));
+end
+alphaPairMask = alphaInteriorMask(:) & alphaInteriorMask(:)';
+[APgrid,ANgrid] = ndgrid(a,a);
+alphaPrior = log(max(APgrid .* (1-APgrid), realmin)) + log(max(ANgrid .* (1-ANgrid), realmin));
+
+alphaScoreRaw = [];
+alphaScoreName = 'none';
+if isfield(TDdataParamRecovery,'fitScoreRSTD') && isequal(size(TDdataParamRecovery.fitScoreRSTD),[numel(a) numel(a)])
+    alphaScoreRaw = TDdataParamRecovery.fitScoreRSTD;
+    alphaScoreName = 'fitScoreRSTD';
+elseif isfield(TDdataParamRecovery,'logLikRSTD') && isequal(size(TDdataParamRecovery.logLikRSTD),[numel(a) numel(a)])
+    alphaScoreRaw = TDdataParamRecovery.logLikRSTD;
+    alphaScoreName = 'logLikRSTD';
+elseif isfield(TDdataParamRecovery,'inverseTemperatureRSTD') && isequal(size(TDdataParamRecovery.inverseTemperatureRSTD),[numel(a) numel(a)])
+    alphaScoreRaw = TDdataParamRecovery.inverseTemperatureRSTD;
+    alphaScoreName = 'inverseTemperatureRSTD';
+end
+
+if isempty(alphaScoreRaw)
+    % Fallback: keep the raw best pair, but clamp it into the interior mask.
+    interiorIdx = find(alphaInteriorMask);
+    [~,tmpAp] = min(abs(a(interiorIdx)-a(rawBestAp)));
+    [~,tmpAn] = min(abs(a(interiorIdx)-a(rawBestAn)));
+    bestAp = interiorIdx(tmpAp);
+    bestAn = interiorIdx(tmpAn);
+    alphaScoreReg = nan(numel(a),numel(a));
+    warning('No 2-D RSTD fit landscape found. Clamping raw alpha indices into the interior range only.');
+else
+    alphaScoreReg = double(alphaScoreRaw);
+    alphaScoreReg(~isfinite(alphaScoreReg)) = nan;
+    alphaScoreReg(~alphaPairMask) = nan;
+    alphaScoreReg = alphaScoreReg + alphaPriorStrength .* alphaPrior;
+
+    validScore = isfinite(alphaScoreReg(:));
+    if any(validScore)
+        validLinearIdx = find(validScore);
+        [~,tmpBest] = max(alphaScoreReg(validScore));
+        bestLinearIdx = validLinearIdx(tmpBest);
+        [bestAp,bestAn] = ind2sub(size(alphaScoreReg),bestLinearIdx);
+    else
+        interiorIdx = find(alphaInteriorMask);
+        [~,tmpAp] = min(abs(a(interiorIdx)-a(rawBestAp)));
+        [~,tmpAn] = min(abs(a(interiorIdx)-a(rawBestAn)));
+        bestAp = interiorIdx(tmpAp);
+        bestAn = interiorIdx(tmpAn);
+        warning('Regularized alpha landscape had no finite values. Clamping raw alpha indices into the interior range only.');
+    end
+end
+
+TDdataGradients.positiveBetaMaxIdx_raw = rawBestAp;
+TDdataGradients.negativeBetaMaxIdx_raw = rawBestAn;
+TDdataGradients.positiveBetaMaxIdx = bestAp;
+TDdataGradients.negativeBetaMaxIdx = bestAn;
+TDdataGradients.bestAlphaPositive = a(bestAp);
+TDdataGradients.bestAlphaNegative = a(bestAn);
+TDdataGradients.alphaSelection.alphaLowerBound = alphaLowerBound;
+TDdataGradients.alphaSelection.alphaUpperBound = alphaUpperBound;
+TDdataGradients.alphaSelection.alphaPriorStrength = alphaPriorStrength;
+TDdataGradients.alphaSelection.scoreName = alphaScoreName;
+TDdataGradients.alphaSelection.rawAlphaPositive = a(rawBestAp);
+TDdataGradients.alphaSelection.rawAlphaNegative = a(rawBestAn);
+TDdataGradients.alphaSelection.regularizedAlphaPositive = a(bestAp);
+TDdataGradients.alphaSelection.regularizedAlphaNegative = a(bestAn);
+TDdataGradients.alphaSelection.regularizedScore = alphaScoreReg;
+
+fprintf('\nAlpha selection for %s:\n', ptID);
+fprintf('  raw behavioral alpha+ = %.3f, alpha- = %.3f\n', a(rawBestAp), a(rawBestAn));
+fprintf('  regularized alpha+    = %.3f, alpha- = %.3f\n', a(bestAp), a(bestAn));
+fprintf('  alpha score source    = %s\n', alphaScoreName);
+
 
 % Validate and align TD variables.
 if ndims(TDdataGradients.rstdV) ~= 3
@@ -223,6 +320,16 @@ cueData = cueData(:,1:nTrials);
 balloonIDs = balloonIDs(1:nTrials);
 outcomeTypeCat = outcomeTypeCat(1:nTrials);
 
+% Align points vector to the exact trial set used for neural modeling.
+% pointsPerTrial is used only as a nuisance covariate in the neural model.
+pointsPerTrial = pointsPerTrial(:);
+if numel(pointsPerTrial) < nTrials
+    warning('pointsPerTrial has %d trials but neural model uses %d. Padding missing values with NaN.', numel(pointsPerTrial), nTrials);
+    pointsPerTrial(end+1:nTrials,1) = nan;
+elseif numel(pointsPerTrial) > nTrials
+    pointsPerTrial = pointsPerTrial(1:nTrials);
+end
+
 fprintf('\nTD variable checks for %s:\n', ptID);
 fprintf('  nTrials used = %d\n', nTrials);
 fprintf('  size(rstdV)   = [%s]\n', num2str(size(TDdataGradients.rstdV)));
@@ -265,6 +372,44 @@ TrialType = categorical(TrialType);
 OutcomeType = outcomeTypeCat';
 OutcomeType = categorical(OutcomeType);
 
+% Nuisance covariates for neural models.
+% TrialNumberZ controls slow drift/fatigue/learning over the session.
+% AbsPointsPerTrialZ controls reward magnitude at outcome without duplicating
+% the sign already captured by Outcome (banked vs popped).
+TrialNumber = (1:nTrials)';
+TrialNumberZ = TrialNumber;
+if std(TrialNumberZ) > 0
+    TrialNumberZ = (TrialNumberZ - mean(TrialNumberZ)) ./ std(TrialNumberZ);
+else
+    TrialNumberZ = zeros(size(TrialNumberZ));
+end
+
+PointsPerTrial = pointsPerTrial(:);
+AbsPointsPerTrial = abs(PointsPerTrial);
+AbsPointsPerTrialZ = AbsPointsPerTrial;
+validPtsForZ = isfinite(AbsPointsPerTrialZ);
+if any(validPtsForZ)
+    ptsMean = mean(AbsPointsPerTrialZ(validPtsForZ));
+    ptsStd = std(AbsPointsPerTrialZ(validPtsForZ));
+    if ptsStd > 0
+        AbsPointsPerTrialZ(validPtsForZ) = (AbsPointsPerTrialZ(validPtsForZ) - ptsMean) ./ ptsStd;
+    else
+        AbsPointsPerTrialZ(validPtsForZ) = 0;
+    end
+end
+AbsPointsPerTrialZ(~validPtsForZ) = nan;
+
+TDdataGradients.modelCovariates.TrialNumber = TrialNumber;
+TDdataGradients.modelCovariates.TrialNumberZ = TrialNumberZ;
+TDdataGradients.modelCovariates.PointsPerTrial = PointsPerTrial;
+TDdataGradients.modelCovariates.AbsPointsPerTrial = AbsPointsPerTrial;
+TDdataGradients.modelCovariates.AbsPointsPerTrialZ = AbsPointsPerTrialZ;
+
+TDdataGradients.modelFormulas.outcomeAll = 'HG ~ RSTD_PE_pos + RSTD_PE_neg + TrialColor + Outcome + TrialNumberZ + AbsPointsPerTrialZ';
+TDdataGradients.modelFormulas.outcomeSuccess = 'HG ~ RSTD_PE_pos + RSTD_PE_neg + TrialColor + TrialNumberZ + AbsPointsPerTrialZ';
+TDdataGradients.modelFormulas.cueAll = 'HG ~ RSTD_VE + TrialColor + TrialNumberZ';
+TDdataGradients.modelFormulas.cueSuccess = 'HG ~ RSTD_VE + TrialColor + TrialNumberZ';
+
 % Build neural tables once. Use safe valid MATLAB variable names to avoid formula errors.
 rawTrodeLabels = trodeLabels_selectedChans(:)';
 safeTrodeLabels = matlab.lang.makeUniqueStrings(matlab.lang.makeValidName(rawTrodeLabels));
@@ -305,10 +450,26 @@ for chz = nChannels:-1:1
             responseName = TDdataGradients.neuralFit(chz).trodeLabel;
 
             % RSTD model variables (temp tables are all behavior.. best VE and PE for behav)
-            tmpTbl_rstd = table(squeeze(TDdataGradients.rstdV(ap,an,:)),...
-                                squeeze(TDdataGradients.rstdRPE(ap,an,:)),...
+            tmpVE = squeeze(TDdataGradients.rstdV(ap,an,:));
+            tmpPE = squeeze(TDdataGradients.rstdRPE(ap,an,:));
+            tmpVE = tmpVE(:);
+            tmpPE = tmpPE(:);
+
+            % Split signed RPE into separate positive and negative components.
+            % RSTD_PE_pos = positive PE magnitude; zero otherwise.
+            % RSTD_PE_neg = negative PE magnitude; zero otherwise.
+            RSTD_PE_pos = max(tmpPE,0);
+            RSTD_PE_neg = max(-tmpPE,0);
+
+            tmpTbl_rstd = table(tmpVE,...
+                                tmpPE,...
+                                RSTD_PE_pos,...
+                                RSTD_PE_neg,...
                                 TrialColor,TrialType,OutcomeType,...
-                               'VariableNames',{'RSTD_VE','RSTD_PE','TrialColor', 'TrialType', 'Outcome'});
+                                TrialNumber,TrialNumberZ,...
+                                PointsPerTrial,AbsPointsPerTrial,AbsPointsPerTrialZ,...
+                               'VariableNames',{'RSTD_VE','RSTD_PE','RSTD_PE_pos','RSTD_PE_neg','TrialColor', 'TrialType', 'Outcome',...
+                                                'TrialNumber','TrialNumberZ','PointsPerTrial','AbsPointsPerTrial','AbsPointsPerTrialZ'});
 
             % fixed trial colors
             tmpTbl_rstd.TrialColor = categorical(string(tmpTbl_rstd.TrialColor));
@@ -327,9 +488,11 @@ for chz = nChannels:-1:1
             rstdTbl_cue = rstdTbl_cue(LMidx,:);
 
             % FIX: remove rows with NaN/Inf TD variables or neural response.
-            validOutcome = isfinite(rstdTbl_outcome.(responseName)) & isfinite(rstdTbl_outcome.RSTD_PE) & ...
+            validOutcome = isfinite(rstdTbl_outcome.(responseName)) & isfinite(rstdTbl_outcome.RSTD_PE_pos) & isfinite(rstdTbl_outcome.RSTD_PE_neg) & ...
+                           isfinite(rstdTbl_outcome.TrialNumberZ) & isfinite(rstdTbl_outcome.AbsPointsPerTrialZ) & ...
                            ~isundefined(rstdTbl_outcome.TrialColor) & ~isundefined(rstdTbl_outcome.TrialType) & ~isundefined(rstdTbl_outcome.Outcome);
             validCue = isfinite(rstdTbl_cue.(responseName)) & isfinite(rstdTbl_cue.RSTD_VE) & ...
+                       isfinite(rstdTbl_cue.TrialNumberZ) & ...
                        ~isundefined(rstdTbl_cue.TrialColor) & ~isundefined(rstdTbl_cue.TrialType) & ~isundefined(rstdTbl_cue.Outcome);
             rstdTbl_outcome = rstdTbl_outcome(validOutcome,:);
             rstdTbl_cue = rstdTbl_cue(validCue,:);
@@ -343,7 +506,7 @@ for chz = nChannels:-1:1
 
             try
                 if height(rstdTbl_outcome) >= 5
-                    tmpMdl = fitglme(rstdTbl_outcome,[responseName ' ~ RSTD_PE + TrialColor + TrialType + Outcome']); % ALL TRIALS
+                    tmpMdl = fitglme(rstdTbl_outcome,[responseName ' ~ RSTD_PE_pos + RSTD_PE_neg + TrialColor + Outcome + TrialNumberZ + AbsPointsPerTrialZ']); % ALL TRIALS
                     LL_outcome = tmpMdl.LogLikelihood;
                     try
                         R2_outcome = tmpMdl.Rsquared.Adjusted;
@@ -357,7 +520,7 @@ for chz = nChannels:-1:1
 
             try
                 if height(rstdTbl_outcome_success) >= 5
-                    tmpMdl = fitglme(rstdTbl_outcome_success,[responseName ' ~ RSTD_PE + TrialColor + TrialType']); % SUCCESSFUL (BANKED) TRIALS
+                    tmpMdl = fitglme(rstdTbl_outcome_success,[responseName ' ~ RSTD_PE_pos + RSTD_PE_neg + TrialColor + TrialNumberZ + AbsPointsPerTrialZ']); % SUCCESSFUL (BANKED) TRIALS
                     LL_outcomeSuccess = tmpMdl.LogLikelihood;
                     try
                         R2_outcomeSuccess = tmpMdl.Rsquared.Adjusted;
@@ -371,7 +534,7 @@ for chz = nChannels:-1:1
 
             try
                 if height(rstdTbl_cue) >= 5
-                    tmpMdl = fitglme(rstdTbl_cue,[responseName ' ~ RSTD_VE + TrialColor + TrialType']); % ALL TRIALS
+                    tmpMdl = fitglme(rstdTbl_cue,[responseName ' ~ RSTD_VE + TrialColor + TrialNumberZ']); % ALL TRIALS
                     LL_cue = tmpMdl.LogLikelihood;
                     try
                         R2_cue = tmpMdl.Rsquared.Adjusted;
@@ -385,7 +548,7 @@ for chz = nChannels:-1:1
 
             try
                 if height(rstdTbl_cue_success) >= 5
-                    tmpMdl = fitglme(rstdTbl_cue_success,[responseName ' ~ RSTD_VE + TrialColor + TrialType']); % SUCCESSFUL (BANKED) TRIALS
+                    tmpMdl = fitglme(rstdTbl_cue_success,[responseName ' ~ RSTD_VE + TrialColor + TrialNumberZ']); % SUCCESSFUL (BANKED) TRIALS
                     LL_cueSuccess = tmpMdl.LogLikelihood;
                     try
                         R2_cueSuccess = tmpMdl.Rsquared.Adjusted;
@@ -412,12 +575,59 @@ for chz = nChannels:-1:1
         end
     end
 
-    % FIX: save final models/ANOVA at behavioral best alpha, not the last alpha pair in the loop.
+    % Optional diagnostic only: where would the neural LL landscape peak?
+    % This is stored for visualization/diagnosis, but NOT used for the final
+    % ANOVA models below to avoid selecting alpha and testing neural encoding
+    % with the same neural data.
+    neuralScore = nan(size(TDdataGradients.neuralFit(chz).LLimg_outcome));
+    neuralStack = cat(3,TDdataGradients.neuralFit(chz).LLimg_outcome,TDdataGradients.neuralFit(chz).LLimg_cue);
+    neuralValid = isfinite(neuralStack);
+    neuralStackZero = neuralStack;
+    neuralStackZero(~neuralValid) = 0;
+    neuralDenom = sum(neuralValid,3);
+    neuralNumer = sum(neuralStackZero,3);
+    neuralScore(neuralDenom > 0) = neuralNumer(neuralDenom > 0) ./ neuralDenom(neuralDenom > 0);
+    neuralScore(~alphaPairMask) = nan;
+    neuralScoreReg = neuralScore + alphaPriorStrength .* alphaPrior;
+    validNeuralScore = isfinite(neuralScoreReg(:));
+    if any(validNeuralScore)
+        validNeuralIdx = find(validNeuralScore);
+        [~,tmpNeuralBest] = max(neuralScoreReg(validNeuralScore));
+        neuralBestLinearIdx = validNeuralIdx(tmpNeuralBest);
+        [neuralBestAp,neuralBestAn] = ind2sub(size(neuralScoreReg),neuralBestLinearIdx);
+        TDdataGradients.neuralFit(chz).diagnosticNeuralBestApIdx = neuralBestAp;
+        TDdataGradients.neuralFit(chz).diagnosticNeuralBestAnIdx = neuralBestAn;
+        TDdataGradients.neuralFit(chz).diagnosticNeuralBestAlphaPositive = a(neuralBestAp);
+        TDdataGradients.neuralFit(chz).diagnosticNeuralBestAlphaNegative = a(neuralBestAn);
+    else
+        TDdataGradients.neuralFit(chz).diagnosticNeuralBestApIdx = nan;
+        TDdataGradients.neuralFit(chz).diagnosticNeuralBestAnIdx = nan;
+        TDdataGradients.neuralFit(chz).diagnosticNeuralBestAlphaPositive = nan;
+        TDdataGradients.neuralFit(chz).diagnosticNeuralBestAlphaNegative = nan;
+    end
+
+    % FIX: save final models/ANOVA at the regularized behavioral alpha pair, not the last alpha pair in the loop.
     responseName = TDdataGradients.neuralFit(chz).trodeLabel;
-    tmpTbl_rstd = table(squeeze(TDdataGradients.rstdV(bestAp,bestAn,:)),...
-                        squeeze(TDdataGradients.rstdRPE(bestAp,bestAn,:)),...
+    tmpVE = squeeze(TDdataGradients.rstdV(bestAp,bestAn,:));
+    tmpPE = squeeze(TDdataGradients.rstdRPE(bestAp,bestAn,:));
+    tmpVE = tmpVE(:);
+    tmpPE = tmpPE(:);
+
+    % Split signed RPE into separate positive and negative components.
+    % RSTD_PE_pos = positive PE magnitude; zero otherwise.
+    % RSTD_PE_neg = negative PE magnitude; zero otherwise.
+    RSTD_PE_pos = max(tmpPE,0);
+    RSTD_PE_neg = max(-tmpPE,0);
+
+    tmpTbl_rstd = table(tmpVE,...
+                        tmpPE,...
+                        RSTD_PE_pos,...
+                        RSTD_PE_neg,...
                         TrialColor,TrialType,OutcomeType,...
-                       'VariableNames',{'RSTD_VE','RSTD_PE','TrialColor', 'TrialType', 'Outcome'});
+                        TrialNumber,TrialNumberZ,...
+                        PointsPerTrial,AbsPointsPerTrial,AbsPointsPerTrialZ,...
+                       'VariableNames',{'RSTD_VE','RSTD_PE','RSTD_PE_pos','RSTD_PE_neg','TrialColor', 'TrialType', 'Outcome',...
+                                        'TrialNumber','TrialNumberZ','PointsPerTrial','AbsPointsPerTrial','AbsPointsPerTrialZ'});
     tmpTbl_rstd.TrialColor = categorical(string(tmpTbl_rstd.TrialColor));
     tmpTbl_rstd.TrialColor = removecats(tmpTbl_rstd.TrialColor);
     tmpTbl_rstd.TrialType = categorical(isActive, [1 0], {'active', 'passive'});
@@ -429,9 +639,11 @@ for chz = nChannels:-1:1
     rstdTbl_outcome = rstdTbl_outcome(LMidx,:);
     rstdTbl_cue = rstdTbl_cue(LMidx,:);
 
-    validOutcome = isfinite(rstdTbl_outcome.(responseName)) & isfinite(rstdTbl_outcome.RSTD_PE) & ...
+    validOutcome = isfinite(rstdTbl_outcome.(responseName)) & isfinite(rstdTbl_outcome.RSTD_PE_pos) & isfinite(rstdTbl_outcome.RSTD_PE_neg) & ...
+                   isfinite(rstdTbl_outcome.TrialNumberZ) & isfinite(rstdTbl_outcome.AbsPointsPerTrialZ) & ...
                    ~isundefined(rstdTbl_outcome.TrialColor) & ~isundefined(rstdTbl_outcome.TrialType) & ~isundefined(rstdTbl_outcome.Outcome);
     validCue = isfinite(rstdTbl_cue.(responseName)) & isfinite(rstdTbl_cue.RSTD_VE) & ...
+               isfinite(rstdTbl_cue.TrialNumberZ) & ...
                ~isundefined(rstdTbl_cue.TrialColor) & ~isundefined(rstdTbl_cue.TrialType) & ~isundefined(rstdTbl_cue.Outcome);
     rstdTbl_outcome = rstdTbl_outcome(validOutcome,:);
     rstdTbl_cue = rstdTbl_cue(validCue,:);
@@ -450,7 +662,7 @@ for chz = nChannels:-1:1
 
     try
         if height(rstdTbl_outcome) >= 5
-            TDdataGradients.neuralFit(chz).rstd_OutcomeModel = fitglme(rstdTbl_outcome,[responseName ' ~ RSTD_PE + TrialColor + TrialType + Outcome']);
+            TDdataGradients.neuralFit(chz).rstd_OutcomeModel = fitglme(rstdTbl_outcome,[responseName ' ~ RSTD_PE_pos + RSTD_PE_neg + TrialColor + Outcome + TrialNumberZ + AbsPointsPerTrialZ']);
             TDdataGradients.neuralFit(chz).ANOVA_rstd_Outcome = anova(TDdataGradients.neuralFit(chz).rstd_OutcomeModel);
         end
     catch ME
@@ -458,7 +670,7 @@ for chz = nChannels:-1:1
     end
     try
         if height(rstdTbl_outcome_success) >= 5
-            TDdataGradients.neuralFit(chz).rstd_OutcomeSuccessModel = fitglme(rstdTbl_outcome_success,[responseName ' ~ RSTD_PE + TrialColor + TrialType']);
+            TDdataGradients.neuralFit(chz).rstd_OutcomeSuccessModel = fitglme(rstdTbl_outcome_success,[responseName ' ~ RSTD_PE_pos + RSTD_PE_neg + TrialColor + TrialNumberZ + AbsPointsPerTrialZ']);
             TDdataGradients.neuralFit(chz).ANOVA_rstd_OutcomeSuccess = anova(TDdataGradients.neuralFit(chz).rstd_OutcomeSuccessModel);
         end
     catch ME
@@ -466,7 +678,7 @@ for chz = nChannels:-1:1
     end
     try
         if height(rstdTbl_cue) >= 5
-            TDdataGradients.neuralFit(chz).rstd_CueModel = fitglme(rstdTbl_cue,[responseName ' ~ RSTD_VE + TrialColor + TrialType']);
+            TDdataGradients.neuralFit(chz).rstd_CueModel = fitglme(rstdTbl_cue,[responseName ' ~ RSTD_VE + TrialColor + TrialNumberZ']);
             TDdataGradients.neuralFit(chz).ANOVA_rstd_Cue = anova(TDdataGradients.neuralFit(chz).rstd_CueModel);
         end
     catch ME
@@ -474,7 +686,7 @@ for chz = nChannels:-1:1
     end
     try
         if height(rstdTbl_cue_success) >= 5
-            TDdataGradients.neuralFit(chz).rstd_CueSuccessModel = fitglme(rstdTbl_cue_success,[responseName ' ~ RSTD_VE + TrialColor + TrialType']);
+            TDdataGradients.neuralFit(chz).rstd_CueSuccessModel = fitglme(rstdTbl_cue_success,[responseName ' ~ RSTD_VE + TrialColor + TrialNumberZ']);
             TDdataGradients.neuralFit(chz).ANOVA_rstd_CueSuccess = anova(TDdataGradients.neuralFit(chz).rstd_CueSuccessModel);
         end
     catch ME
