@@ -1336,7 +1336,7 @@ elseif strcmp('TDlearnNeural',analysis)
 mainPath = '\\155.100.91.44\D\Data\preProcessed\BART_preprocessed\';
 neuralData_All = {};
 
-% keyboard
+keyboard
 
 for p = 1:length(ptArray)
     ptID = ptArray{p};

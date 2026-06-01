@@ -526,8 +526,18 @@ for chz = nChannels:-1:1
 
         % saving figures with significant models.
         halfMaximize(chz*1000,'page')
+
+        % PDF filename/path. Use the same text as the figure title.
+        pdfName = [ptID '_' TDdataGradients.neuralFit(chz).trodeLabel '_' ...
+                   TDdataGradients.neuralFit(chz).new_trodeLabel '_RSTD_modelFitLandscapes.pdf'];
+        pdfPath = fullfile('\\155.100.91.44\d\Data\Rhiannon\BART_RLDM_outputs\RSTD\RSTD_neuralFits\', pdfName);
+
+        % Put the full figure title exactly the same as the PDF name.
+        set(gcf,'Name',pdfName,'NumberTitle','off')
+        sgtitle(pdfName,'Interpreter','none')
+
         % saveas(chz*1000,sprintf('\\155.100.91.44\d\Data\Rhiannon\BART_RLDM_outputs\RSTD\RSTD_neuralFits\pt%s_%s_%s_RSTD_modelFitLandscapes.pdf',ptID,TDdata.neuralFit(chz).trodeLabel, TDdata.neuralFit(chz).new_trodeLabel))
-         saveas(chz*1000,fullfile('\\155.100.91.44\d\Data\Rhiannon\BART_RLDM_outputs\RSTD\RSTD_neuralFits\',[ptID '_' TDdataGradients.neuralFit(chz).trodeLabel '_' TDdataGradients.neuralFit(chz).new_trodeLabel '_RSTD_modelFitLandscapes.pdf']))
+        saveas(chz*1000,pdfPath)
         close(chz*1000)
 
     end % if plot

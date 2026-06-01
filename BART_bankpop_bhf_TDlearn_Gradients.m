@@ -144,24 +144,50 @@ save(fullfile(fileparts(parentDir), [ptID '_outcomeAndCueHGs.mat']), 'outcomeAnd
 toc
 
 % defining model data
-% ATTENTION; I've changed this to true
+% ATTENTION: I am using shorter time windows here
 
 % baseline and timing params
+
 % startAnalysis_outcome = 0.1;
 % endAnalysis_outcome = 1.1;
+
 % startAnalysis_cue = 0.1;
 % endAnalysis_cue = 1.1;
 
+
+
+% another window
+% startAnalysis_outcome = 0.1;
+% endAnalysis_outcome = 0.4;
+% 
+% startAnalysis_cue = 0.01;
+% endAnalysis_cue = 0.4;
+
+
+% wnother window
+% startAnalysis_outcome = 0.2;
+% endAnalysis_outcome = 0.9;
+% 
+% startAnalysis_cue = 0.01;
+% endAnalysis_cue = 0.5;
+
+
+% another window
 startAnalysis_outcome = 0.1;
 endAnalysis_outcome = 0.4;
 
-startAnalysis_cue = 0.1;
-endAnalysis_cue = 0.4;
+startAnalysis_cue = 0.01;
+endAnalysis_cue = 0.5;
 
+
+
+% baseline window
 bP_outcome = [-0.7 -0.2]; % one second, starting a second and a half before the outcome
 bP_cue = [-0.11 -0.01]; % one second, starting a second and a half before the cue
 
 baselineNorm = true;
+
+
 if baselineNorm
     outcomeData = squeeze(mean(HGmat_outcome(:,tSec > startAnalysis_outcome & tSec < endAnalysis_outcome,:),2))./squeeze(mean(HGmat_outcome(:,tSec > bP_outcome(1) & tSec < bP_outcome(2),:),2));
     cueData = squeeze(mean(HGmat_cue(:,tSec > startAnalysis_cue & tSec < endAnalysis_cue,:),2))./squeeze(mean(HGmat_cue(:,tSec > bP_cue(1) & tSec < bP_cue(2),:),2));
@@ -169,6 +195,48 @@ else
     outcomeData = squeeze(mean(HGmat_outcome(:,tSec > startAnalysis_outcome & tSec < endAnalysis_outcome,:),2));
     cueData = squeeze(mean(HGmat_cue(:,tSec > startAnalysis_cue & tSec < endAnalysis_cue,:),2));
 end
+
+
+%ATTENTION: using log of baseline for more symmetric neural variability and
+%also we would have Better interpretation 0 means no change from baseline. 
+% Positive means HG increased. Negative means HG decreased.
+
+% 
+% if baselineNorm
+% 
+%     % ----- outcome-aligned HG -----
+%     outcomePost = squeeze(mean(HGmat_outcome(:, ...
+%         tSec > startAnalysis_outcome & tSec < endAnalysis_outcome, :), 2));
+% 
+%     outcomeBase = squeeze(mean(HGmat_outcome(:, ...
+%         tSec > bP_outcome(1) & tSec < bP_outcome(2), :), 2));
+% 
+%     % log baseline-normalized HG:
+%     % equivalent to log(post / baseline), but safer numerically
+%     outcomeData = log(outcomePost + eps) - log(outcomeBase + eps);
+% 
+% 
+%     % ----- cue-aligned HG -----
+%     cuePost = squeeze(mean(HGmat_cue(:, ...
+%         tSec > startAnalysis_cue & tSec < endAnalysis_cue, :), 2));
+% 
+%     cueBase = squeeze(mean(HGmat_cue(:, ...
+%         tSec > bP_cue(1) & tSec < bP_cue(2), :), 2));
+% 
+%     % log baseline-normalized HG
+%     cueData = log(cuePost + eps) - log(cueBase + eps);
+% 
+% else
+% 
+%     outcomeData = squeeze(mean(HGmat_outcome(:, ...
+%         tSec > startAnalysis_outcome & tSec < endAnalysis_outcome, :), 2));
+% 
+%     cueData = squeeze(mean(HGmat_cue(:, ...
+%         tSec > startAnalysis_cue & tSec < endAnalysis_cue, :), 2));
+% 
+% end
+
+
 
 %% ~~~~~~~~ NILL!!! This is what we need to replace with your parameters! :)
 tic
