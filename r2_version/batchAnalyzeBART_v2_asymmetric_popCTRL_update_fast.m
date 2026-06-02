@@ -43,7 +43,7 @@ set(0,'defaultfigurerenderer','painters')
 
 % Only those patients who have EEG or micros.
 % pts = 1:nPts; 
-pts = 1:2; 
+pts = 1:1; 
 % 26-71 Mark's computer 
 % 1-25 Rhiannon's computer
  
