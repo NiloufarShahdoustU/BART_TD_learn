@@ -810,7 +810,7 @@ for chz = nChannels:-1:1
         % RPE/value model improves fit over the baseline task-only model.
         figure(chz*1000)
 
-        subplot(2,4,1)
+        subplot(2,3,1)
         imagesc(a(end:-skipFactor:1),a(end:-skipFactor:1),TDdataGradients.neuralFit(chz).LLimg_outcome(end:-skipFactor:1,end:-skipFactor:1));
         axis xy square
         xlabel('positive alpha')
@@ -818,7 +818,7 @@ for chz = nChannels:-1:1
         title(['Outcome RPE LL -- ' TDdataGradients.neuralFit(chz).trodeLabel])
         colorbar
 
-        subplot(2,4,2)
+        subplot(2,3,2)
         imagesc(a(end:-skipFactor:1),a(end:-skipFactor:1),TDdataGradients.neuralFit(chz).deltaAICimg_outcome(end:-skipFactor:1,end:-skipFactor:1));
         axis xy square
         xlabel('positive alpha')
@@ -826,16 +826,8 @@ for chz = nChannels:-1:1
         title('Outcome RPE \DeltaAIC')
         colorbar
 
-        subplot(2,4,3)
-        negLogP_outcome = -log10(max(TDdataGradients.neuralFit(chz).pLRTimg_outcome,realmin));
-        imagesc(a(end:-skipFactor:1),a(end:-skipFactor:1),negLogP_outcome(end:-skipFactor:1,end:-skipFactor:1));
-        axis xy square
-        xlabel('positive alpha')
-        ylabel('negative alpha')
-        title('Outcome RPE -log10(pLRT)')
-        colorbar
 
-        subplot(2,4,4)
+        subplot(2,3,3)
         imagesc(a(end:-skipFactor:1),a(end:-skipFactor:1),TDdataGradients.neuralFit(chz).R2img_outcome(end:-skipFactor:1,end:-skipFactor:1));
         axis xy square
         xlabel('positive alpha')
@@ -843,7 +835,7 @@ for chz = nChannels:-1:1
         title('Outcome RPE R^2')
         colorbar
 
-        subplot(2,4,5)
+        subplot(2,3,4)
         imagesc(a(end:-skipFactor:1),a(end:-skipFactor:1),TDdataGradients.neuralFit(chz).LLimg_cue(end:-skipFactor:1,end:-skipFactor:1));
         axis xy square
         xlabel('positive alpha')
@@ -851,7 +843,7 @@ for chz = nChannels:-1:1
         title('Cue value LL')
         colorbar
 
-        subplot(2,4,6)
+        subplot(2,3,5)
         imagesc(a(end:-skipFactor:1),a(end:-skipFactor:1),TDdataGradients.neuralFit(chz).deltaAICimg_cue(end:-skipFactor:1,end:-skipFactor:1));
         axis xy square
         xlabel('positive alpha')
@@ -859,16 +851,8 @@ for chz = nChannels:-1:1
         title('Cue value \DeltaAIC')
         colorbar
 
-        subplot(2,4,7)
-        negLogP_cue = -log10(max(TDdataGradients.neuralFit(chz).pLRTimg_cue,realmin));
-        imagesc(a(end:-skipFactor:1),a(end:-skipFactor:1),negLogP_cue(end:-skipFactor:1,end:-skipFactor:1));
-        axis xy square
-        xlabel('positive alpha')
-        ylabel('negative alpha')
-        title('Cue value -log10(pLRT)')
-        colorbar
 
-        subplot(2,4,8)
+        subplot(2,3,6)
         imagesc(a(end:-skipFactor:1),a(end:-skipFactor:1),TDdataGradients.neuralFit(chz).R2img_cue(end:-skipFactor:1,end:-skipFactor:1));
         axis xy square
         xlabel('positive alpha')
@@ -891,31 +875,51 @@ for chz = nChannels:-1:1
         close(chz*1000)
 
         % Figure 2: only for significant best-alpha latent effects.
-        if any(sig_best)
+        keepIdx = strcmpi(comparisonNames,'OutcomeRPE') | strcmpi(comparisonNames,'CueVE');
+        
+        deltaAIC_plot = deltaAIC_best(keepIdx);
+        pLRT_plot     = pLRT_best(keepIdx);
+        sig_plot      = sig_best(keepIdx);
+        names_plot    = comparisonNames(keepIdx);
+        
+        if any(sig_plot)
             figID = chz*1000 + 1;
             if ishandle(figID); close(figID); end
             figure(figID)
-            bar(deltaAIC_best)
+        
+            bar(deltaAIC_plot, 0.45)   % narrower bars
             hold on
             yline(0,'--k','LineWidth',1)
-            for jj = 1:numel(deltaAIC_best)
-                if isfinite(deltaAIC_best(jj)) && isfinite(pLRT_best(jj))
-                    text(jj,deltaAIC_best(jj),sprintf('p=%.3g',pLRT_best(jj)),...
-                        'HorizontalAlignment','center','VerticalAlignment','bottom','Rotation',45)
+        
+            for jj = 1:numel(deltaAIC_plot)
+                if isfinite(deltaAIC_plot(jj)) && isfinite(pLRT_plot(jj))
+                    text(jj, 0.05, sprintf('p=%.3g',pLRT_plot(jj)), ...
+                        'HorizontalAlignment','center', ...
+                        'VerticalAlignment','bottom', ...
+                        'Rotation',0)
                 end
             end
+        
             hold off
-            set(gca,'XTick',1:4,'XTickLabel',comparisonNames)
+        
+            set(gca,'XTick',1:numel(names_plot),'XTickLabel',names_plot)
             xtickangle(30)
+        
             ylabel('\DeltaAIC = baseline AIC - full AIC')
-            title(sprintf('%s %s significant latent effects',ptID,TDdataGradients.neuralFit(chz).trodeLabel),'Interpreter','none')
+            title(sprintf('%s %s OutcomeRPE and CueVE', ...
+                ptID, TDdataGradients.neuralFit(chz).trodeLabel), ...
+                'Interpreter','none')
+        
+            box off   % removes top and right borders
             axis square
-
+        
             pdfName = [ptID '_' TDdataGradients.neuralFit(chz).trodeLabel '_' ...
-                       TDdataGradients.neuralFit(chz).new_trodeLabel '_DeltaAIC_significantLatentEffects.pdf'];
+                       TDdataGradients.neuralFit(chz).new_trodeLabel ...
+                       '_DeltaAIC_OutcomeRPE_CueVE.pdf'];
+        
             pdfPath = fullfile(pdfDir, pdfName);
+        
             set(gcf,'Name',pdfName,'NumberTitle','off')
-            sgtitle(pdfName,'Interpreter','none')
             saveas(figID,pdfPath)
             close(figID)
         end
