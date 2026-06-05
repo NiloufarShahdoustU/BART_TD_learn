@@ -220,13 +220,13 @@ pRSTD_Color_outcomeSuccess = nan(1,nFits);
 pRSTD_Type_outcomeSuccess = nan(1,nFits);
 
 deltaAIC_OutcomeRPE = nan(1,nFits);
-deltaAIC_OutcomeSuccessRPE = nan(1,nFits);
 deltaAIC_CueVE = nan(1,nFits);
-deltaAIC_CueSuccessVE = nan(1,nFits);
 pLRT_OutcomeRPE = nan(1,nFits);
-pLRT_OutcomeSuccessRPE = nan(1,nFits);
 pLRT_CueVE = nan(1,nFits);
-pLRT_CueSuccessVE = nan(1,nFits);
+pPerm_OutcomeRPE = nan(1,nFits);
+pPerm_CueVE = nan(1,nFits);
+pHolmWithinChannel_OutcomeRPE = nan(1,nFits);
+pHolmWithinChannel_CueVE = nan(1,nFits);
 
 for cc = nFits:-1:1
     % Old ANOVA summaries are retained for compatibility, but guarded so
@@ -268,26 +268,28 @@ for cc = nFits:-1:1
 
         idx = strcmp(tmpC.Comparison,'OutcomeRPE');
         if any(idx)
-            deltaAIC_OutcomeRPE(cc) = tmpC.DeltaAIC(find(idx,1));
-            pLRT_OutcomeRPE(cc) = tmpC.pLRT(find(idx,1));
-        end
-
-        idx = strcmp(tmpC.Comparison,'OutcomeSuccessRPE');
-        if any(idx)
-            deltaAIC_OutcomeSuccessRPE(cc) = tmpC.DeltaAIC(find(idx,1));
-            pLRT_OutcomeSuccessRPE(cc) = tmpC.pLRT(find(idx,1));
+            idx1 = find(idx,1);
+            deltaAIC_OutcomeRPE(cc) = tmpC.DeltaAIC(idx1);
+            pLRT_OutcomeRPE(cc) = tmpC.pLRT(idx1);
+            if ismember('pPerm',tmpC.Properties.VariableNames)
+                pPerm_OutcomeRPE(cc) = tmpC.pPerm(idx1);
+            end
+            if ismember('pHolmWithinChannel',tmpC.Properties.VariableNames)
+                pHolmWithinChannel_OutcomeRPE(cc) = tmpC.pHolmWithinChannel(idx1);
+            end
         end
 
         idx = strcmp(tmpC.Comparison,'CueVE');
         if any(idx)
-            deltaAIC_CueVE(cc) = tmpC.DeltaAIC(find(idx,1));
-            pLRT_CueVE(cc) = tmpC.pLRT(find(idx,1));
-        end
-
-        idx = strcmp(tmpC.Comparison,'CueSuccessVE');
-        if any(idx)
-            deltaAIC_CueSuccessVE(cc) = tmpC.DeltaAIC(find(idx,1));
-            pLRT_CueSuccessVE(cc) = tmpC.pLRT(find(idx,1));
+            idx1 = find(idx,1);
+            deltaAIC_CueVE(cc) = tmpC.DeltaAIC(idx1);
+            pLRT_CueVE(cc) = tmpC.pLRT(idx1);
+            if ismember('pPerm',tmpC.Properties.VariableNames)
+                pPerm_CueVE(cc) = tmpC.pPerm(idx1);
+            end
+            if ismember('pHolmWithinChannel',tmpC.Properties.VariableNames)
+                pHolmWithinChannel_CueVE(cc) = tmpC.pHolmWithinChannel(idx1);
+            end
         end
     end
 
@@ -319,33 +321,31 @@ sigRSTD_PE_outcomeSuccess = (pRSTD_PE_outcomeSuccess)<crit;
 sigRSTD_Color_outcomeSuccess = (pRSTD_Color_outcomeSuccess)<crit;
 sigRSTD_Type_outcomeSuccess = (pRSTD_Type_outcomeSuccess)<crit;
 
-% Preferred DeltaAIC/LRT significance.
-% deltaAIC > 0 means the latent model beats the baseline model.
-% pLRT < .05 means RPE/value significantly improves fit over baseline.
-sigDeltaAIC_OutcomeRPE = deltaAIC_OutcomeRPE > 0 & pLRT_OutcomeRPE < crit;
-sigDeltaAIC_OutcomeSuccessRPE = deltaAIC_OutcomeSuccessRPE > 0 & pLRT_OutcomeSuccessRPE < crit;
-sigDeltaAIC_CueVE = deltaAIC_CueVE > 0 & pLRT_CueVE < crit;
-sigDeltaAIC_CueSuccessVE = deltaAIC_CueSuccessVE > 0 & pLRT_CueSuccessVE < crit;
-sigDeltaAIC_any = sigDeltaAIC_OutcomeRPE | sigDeltaAIC_OutcomeSuccessRPE | sigDeltaAIC_CueVE | sigDeltaAIC_CueSuccessVE;
+% Preferred DeltaAIC/permutation significance.
+% No merged-area / region-level testing and no across-channel correction.
+% Holm-Bonferroni correction is applied only within each channel across
+% the two planned tests: OutcomeRPE and CueVE.
+channelPalpha = 0.05;
+sigDeltaAIC_OutcomeRPE = deltaAIC_OutcomeRPE > 0 & pHolmWithinChannel_OutcomeRPE < channelPalpha;
+sigDeltaAIC_CueVE = deltaAIC_CueVE > 0 & pHolmWithinChannel_CueVE < channelPalpha;
+sigDeltaAIC_any = sigDeltaAIC_OutcomeRPE | sigDeltaAIC_CueVE;
 
-TDdataGradients.deltaAICWrapperSummary = table((1:nFits)',deltaAIC_OutcomeRPE',pLRT_OutcomeRPE',sigDeltaAIC_OutcomeRPE',...
-    deltaAIC_OutcomeSuccessRPE',pLRT_OutcomeSuccessRPE',sigDeltaAIC_OutcomeSuccessRPE',...
-    deltaAIC_CueVE',pLRT_CueVE',sigDeltaAIC_CueVE',...
-    deltaAIC_CueSuccessVE',pLRT_CueSuccessVE',sigDeltaAIC_CueSuccessVE',sigDeltaAIC_any',...
-    'VariableNames',{'ChannelIndex','DeltaAIC_OutcomeRPE','pLRT_OutcomeRPE','Sig_OutcomeRPE',...
-    'DeltaAIC_OutcomeSuccessRPE','pLRT_OutcomeSuccessRPE','Sig_OutcomeSuccessRPE',...
-    'DeltaAIC_CueVE','pLRT_CueVE','Sig_CueVE',...
-    'DeltaAIC_CueSuccessVE','pLRT_CueSuccessVE','Sig_CueSuccessVE','SigAny'});
+TDdataGradients.deltaAICWrapperSummary = table((1:nFits)',...
+    deltaAIC_OutcomeRPE',pLRT_OutcomeRPE',pPerm_OutcomeRPE',pHolmWithinChannel_OutcomeRPE',sigDeltaAIC_OutcomeRPE',...
+    deltaAIC_CueVE',pLRT_CueVE',pPerm_CueVE',pHolmWithinChannel_CueVE',sigDeltaAIC_CueVE',sigDeltaAIC_any',...
+    'VariableNames',{'ChannelIndex','DeltaAIC_OutcomeRPE','pLRT_OutcomeRPE','pPerm_OutcomeRPE','pHolmWithinChannel_OutcomeRPE','Sig_OutcomeRPE',...
+    'DeltaAIC_CueVE','pLRT_CueVE','pPerm_CueVE','pHolmWithinChannel_CueVE','Sig_CueVE','SigAny'});
+TDdataGradients.deltaAICWrapperSummary = TDdataGradients.deltaAICWrapperSummary(TDdataGradients.deltaAICWrapperSummary.SigAny,:);
 
 % Create significant vars summary
 varNames = {
-    'sigDeltaAIC_OutcomeRPE', 'sigDeltaAIC_OutcomeSuccessRPE', 'sigDeltaAIC_CueVE', 'sigDeltaAIC_CueSuccessVE', ...
+    'sigDeltaAIC_OutcomeRPE_withinChannelHolm', 'sigDeltaAIC_CueVE_withinChannelHolm', ...
     'sigRSTD_VE_cue', 'sigRSTD_Color_cue', 'sigRSTD_Type_cue', ...
     'sigRSTD_VE_cueSuccess', 'sigRSTD_Color_cueSuccess', 'sigRSTD_Type_cueSuccess', ...
     'sigRSTD_PE_outcome', 'sigRSTD_Color_outcome', 'sigRSTD_Type_outcome', ...
     'sigRSTD_PE_outcomeSuccess', 'sigRSTD_Color_outcomeSuccess', 'sigRSTD_Type_outcomeSuccess'};
 sigVars = {
-    sigDeltaAIC_OutcomeRPE, sigDeltaAIC_OutcomeSuccessRPE, sigDeltaAIC_CueVE, sigDeltaAIC_CueSuccessVE, ...
+    sigDeltaAIC_OutcomeRPE, sigDeltaAIC_CueVE, ...
     sigRSTD_VE_cue, sigRSTD_Color_cue, sigRSTD_Type_cue, ...
     sigRSTD_VE_cueSuccess, sigRSTD_Color_cueSuccess, sigRSTD_Type_cueSuccess, ...
     sigRSTD_PE_outcome, sigRSTD_Color_outcome, sigRSTD_Type_outcome, ...

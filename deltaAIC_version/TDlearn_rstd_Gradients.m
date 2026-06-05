@@ -19,6 +19,15 @@ function [TDdataGradients] = TDlearn_rstd_Gradients(ptID,outcomeData,cueData,LMt
 % Fixed version: no local/subfunctions, to avoid MATLAB parser issues.
 % Visualization section is intentionally kept unchanged.
 warning('off','all');
+
+% Settings for final inference.
+% We keep DeltaAIC as the effect-size/model-comparison statistic.
+% Significance is assessed by trial-shuffle permutation of the latent variable(s).
+% Final correction is performed within each channel across the two planned tests.
+% This intentionally avoids merged-area / region-level inference.
+nPermDeltaAIC = 500;
+rng(1,'twister');
+
 if nargin < 3
     error('function requires data')
 end
@@ -531,24 +540,8 @@ for chz = nChannels:-1:1
                 warning('Outcome delta-AIC model failed for %s ap=%d an=%d: %s', responseName, ap, an, ME.message);
             end
 
-            try
-                if height(rstdTbl_outcome_success) >= 5
-                    baseMdl = fitglme(rstdTbl_outcome_success,[responseName ' ~ TrialColor + TrialNumberZ']); % BASELINE: no RPE
-                    tmpMdl = fitglme(rstdTbl_outcome_success,[responseName ' ~ RSTD_PE_pos + RSTD_PE_neg + TrialColor + TrialNumberZ']); % FULL: baseline + RPE
-                    LL_outcomeSuccess = tmpMdl.LogLikelihood;
-                    deltaLL_outcomeSuccess = tmpMdl.LogLikelihood - baseMdl.LogLikelihood;
-                    deltaAIC_outcomeSuccess = baseMdl.ModelCriterion.AIC - tmpMdl.ModelCriterion.AIC; % > 0 means full model is better
-                    dfLRT = max(height(tmpMdl.Coefficients) - height(baseMdl.Coefficients),1);
-                    pLRT_outcomeSuccess = 1 - chi2cdf(max(2*deltaLL_outcomeSuccess,0),dfLRT);
-                    try
-                        R2_outcomeSuccess = tmpMdl.Rsquared.Adjusted;
-                    catch
-                        R2_outcomeSuccess = tmpMdl.Rsquared.Ordinary;
-                    end
-                end
-            catch ME
-                warning('Outcome success delta-AIC model failed for %s ap=%d an=%d: %s', responseName, ap, an, ME.message);
-            end
+            % OutcomeSuccessRPE testing intentionally removed.
+            % Final inference is restricted to OutcomeRPE and CueVE only.
 
             try
                 if height(rstdTbl_cue) >= 5
@@ -569,24 +562,8 @@ for chz = nChannels:-1:1
                 warning('Cue delta-AIC model failed for %s ap=%d an=%d: %s', responseName, ap, an, ME.message);
             end
 
-            try
-                if height(rstdTbl_cue_success) >= 5
-                    baseMdl = fitglme(rstdTbl_cue_success,[responseName ' ~ TrialColor + TrialNumberZ']); % BASELINE: no value estimate
-                    tmpMdl = fitglme(rstdTbl_cue_success,[responseName ' ~ RSTD_VE + TrialColor + TrialNumberZ']); % FULL: baseline + value estimate
-                    LL_cueSuccess = tmpMdl.LogLikelihood;
-                    deltaLL_cueSuccess = tmpMdl.LogLikelihood - baseMdl.LogLikelihood;
-                    deltaAIC_cueSuccess = baseMdl.ModelCriterion.AIC - tmpMdl.ModelCriterion.AIC; % > 0 means full model is better
-                    dfLRT = max(height(tmpMdl.Coefficients) - height(baseMdl.Coefficients),1);
-                    pLRT_cueSuccess = 1 - chi2cdf(max(2*deltaLL_cueSuccess,0),dfLRT);
-                    try
-                        R2_cueSuccess = tmpMdl.Rsquared.Adjusted;
-                    catch
-                        R2_cueSuccess = tmpMdl.Rsquared.Ordinary;
-                    end
-                end
-            catch ME
-                warning('Cue success delta-AIC model failed for %s ap=%d an=%d: %s', responseName, ap, an, ME.message);
-            end
+            % CueSuccessVE testing intentionally removed.
+            % Final inference is restricted to OutcomeRPE and CueVE only.
 
             % Saving log likelihood landscapes per electrode.
             TDdataGradients.neuralFit(chz).LLimg_outcome(ap,an) = LL_outcome;
@@ -695,14 +672,17 @@ for chz = nChannels:-1:1
     rstdTbl_cue_success = rstdTbl_cue(rstdTbl_cue.Outcome == "banked", :);
 
     dummyAnova = array2table(nan(5,5),'VariableNames',{'Col1','Col2','Col3','Col4','Col5'});
-    comparisonNames = {'OutcomeRPE';'OutcomeSuccessRPE';'CueVE';'CueSuccessVE'};
-    deltaLL_best = nan(4,1);
-    deltaAIC_best = nan(4,1);
-    pLRT_best = nan(4,1);
-    LRTstat_best = nan(4,1);
-    dfLRT_best = nan(4,1);
-    nObs_best = nan(4,1);
-    sig_best = false(4,1);
+    comparisonNames = {'OutcomeRPE';'CueVE'};
+    deltaLL_best = nan(2,1);
+    deltaAIC_best = nan(2,1);
+    pLRT_best = nan(2,1);
+    pPerm_best = nan(2,1);
+    pHolmWithinChannel_best = nan(2,1);
+    LRTstat_best = nan(2,1);
+    dfLRT_best = nan(2,1);
+    nObs_best = nan(2,1);
+    sig_best = false(2,1);
+    permDeltaAIC_best = nan(2,nPermDeltaAIC);
 
     TDdataGradients.neuralFit(chz).rstd_OutcomeBaselineModel = [];
     TDdataGradients.neuralFit(chz).rstd_OutcomeModel = [];
@@ -730,28 +710,34 @@ for chz = nChannels:-1:1
             dfLRT_best(1) = max(height(fullMdl.Coefficients) - height(baseMdl.Coefficients),1);
             pLRT_best(1) = 1 - chi2cdf(LRTstat_best(1),dfLRT_best(1));
             nObs_best(1) = height(rstdTbl_outcome);
+
+            % Permutation test using DeltaAIC as the statistic.
+            % Shuffle PE values across trials while keeping HG, color, outcome,
+            % and trial number fixed. The null asks whether PE improves fit
+            % more than a randomly trial-shuffled PE regressor.
+            for pp = 1:nPermDeltaAIC
+                permTbl = rstdTbl_outcome;
+                permIdx = randperm(height(permTbl));
+                permTbl.RSTD_PE_pos = permTbl.RSTD_PE_pos(permIdx);
+                permTbl.RSTD_PE_neg = permTbl.RSTD_PE_neg(permIdx);
+                try
+                    permMdl = fitglme(permTbl,[responseName ' ~ RSTD_PE_pos + RSTD_PE_neg + TrialColor + Outcome + TrialNumberZ']);
+                    permDeltaAIC_best(1,pp) = baseMdl.ModelCriterion.AIC - permMdl.ModelCriterion.AIC;
+                catch
+                    permDeltaAIC_best(1,pp) = nan;
+                end
+            end
+            validPerm = isfinite(permDeltaAIC_best(1,:));
+            if any(validPerm) && isfinite(deltaAIC_best(1))
+                pPerm_best(1) = (1 + sum(permDeltaAIC_best(1,validPerm) >= deltaAIC_best(1))) / (1 + sum(validPerm));
+            end
         end
     catch ME
         warning('Best-alpha outcome delta-AIC model failed for %s: %s', responseName, ME.message);
     end
 
-    try
-        if height(rstdTbl_outcome_success) >= 5
-            baseMdl = fitglme(rstdTbl_outcome_success,[responseName ' ~ TrialColor + TrialNumberZ']);
-            fullMdl = fitglme(rstdTbl_outcome_success,[responseName ' ~ RSTD_PE_pos + RSTD_PE_neg + TrialColor + TrialNumberZ']);
-            TDdataGradients.neuralFit(chz).rstd_OutcomeSuccessBaselineModel = baseMdl;
-            TDdataGradients.neuralFit(chz).rstd_OutcomeSuccessModel = fullMdl;
-            TDdataGradients.neuralFit(chz).ANOVA_rstd_OutcomeSuccess = anova(fullMdl);
-            deltaLL_best(2) = fullMdl.LogLikelihood - baseMdl.LogLikelihood;
-            deltaAIC_best(2) = baseMdl.ModelCriterion.AIC - fullMdl.ModelCriterion.AIC;
-            LRTstat_best(2) = max(2*deltaLL_best(2),0);
-            dfLRT_best(2) = max(height(fullMdl.Coefficients) - height(baseMdl.Coefficients),1);
-            pLRT_best(2) = 1 - chi2cdf(LRTstat_best(2),dfLRT_best(2));
-            nObs_best(2) = height(rstdTbl_outcome_success);
-        end
-    catch ME
-        warning('Best-alpha outcome success delta-AIC model failed for %s: %s', responseName, ME.message);
-    end
+    % OutcomeSuccessRPE testing intentionally removed.
+    % Final inference is restricted to OutcomeRPE and CueVE only.
 
     try
         if height(rstdTbl_cue) >= 5
@@ -760,39 +746,60 @@ for chz = nChannels:-1:1
             TDdataGradients.neuralFit(chz).rstd_CueBaselineModel = baseMdl;
             TDdataGradients.neuralFit(chz).rstd_CueModel = fullMdl;
             TDdataGradients.neuralFit(chz).ANOVA_rstd_Cue = anova(fullMdl);
-            deltaLL_best(3) = fullMdl.LogLikelihood - baseMdl.LogLikelihood;
-            deltaAIC_best(3) = baseMdl.ModelCriterion.AIC - fullMdl.ModelCriterion.AIC;
-            LRTstat_best(3) = max(2*deltaLL_best(3),0);
-            dfLRT_best(3) = max(height(fullMdl.Coefficients) - height(baseMdl.Coefficients),1);
-            pLRT_best(3) = 1 - chi2cdf(LRTstat_best(3),dfLRT_best(3));
-            nObs_best(3) = height(rstdTbl_cue);
+            deltaLL_best(2) = fullMdl.LogLikelihood - baseMdl.LogLikelihood;
+            deltaAIC_best(2) = baseMdl.ModelCriterion.AIC - fullMdl.ModelCriterion.AIC;
+            LRTstat_best(2) = max(2*deltaLL_best(2),0);
+            dfLRT_best(2) = max(height(fullMdl.Coefficients) - height(baseMdl.Coefficients),1);
+            pLRT_best(2) = 1 - chi2cdf(LRTstat_best(2),dfLRT_best(2));
+            nObs_best(2) = height(rstdTbl_cue);
+
+            % Permutation test using DeltaAIC as the statistic.
+            % Shuffle VE values across trials while keeping HG, color, and
+            % trial number fixed.
+            for pp = 1:nPermDeltaAIC
+                permTbl = rstdTbl_cue;
+                permIdx = randperm(height(permTbl));
+                permTbl.RSTD_VE = permTbl.RSTD_VE(permIdx);
+                try
+                    permMdl = fitglme(permTbl,[responseName ' ~ RSTD_VE + TrialColor + TrialNumberZ']);
+                    permDeltaAIC_best(2,pp) = baseMdl.ModelCriterion.AIC - permMdl.ModelCriterion.AIC;
+                catch
+                    permDeltaAIC_best(2,pp) = nan;
+                end
+            end
+            validPerm = isfinite(permDeltaAIC_best(2,:));
+            if any(validPerm) && isfinite(deltaAIC_best(2))
+                pPerm_best(2) = (1 + sum(permDeltaAIC_best(2,validPerm) >= deltaAIC_best(2))) / (1 + sum(validPerm));
+            end
         end
     catch ME
         warning('Best-alpha cue delta-AIC model failed for %s: %s', responseName, ME.message);
     end
 
-    try
-        if height(rstdTbl_cue_success) >= 5
-            baseMdl = fitglme(rstdTbl_cue_success,[responseName ' ~ TrialColor + TrialNumberZ']);
-            fullMdl = fitglme(rstdTbl_cue_success,[responseName ' ~ RSTD_VE + TrialColor + TrialNumberZ']);
-            TDdataGradients.neuralFit(chz).rstd_CueSuccessBaselineModel = baseMdl;
-            TDdataGradients.neuralFit(chz).rstd_CueSuccessModel = fullMdl;
-            TDdataGradients.neuralFit(chz).ANOVA_rstd_CueSuccess = anova(fullMdl);
-            deltaLL_best(4) = fullMdl.LogLikelihood - baseMdl.LogLikelihood;
-            deltaAIC_best(4) = baseMdl.ModelCriterion.AIC - fullMdl.ModelCriterion.AIC;
-            LRTstat_best(4) = max(2*deltaLL_best(4),0);
-            dfLRT_best(4) = max(height(fullMdl.Coefficients) - height(baseMdl.Coefficients),1);
-            pLRT_best(4) = 1 - chi2cdf(LRTstat_best(4),dfLRT_best(4));
-            nObs_best(4) = height(rstdTbl_cue_success);
-        end
-    catch ME
-        warning('Best-alpha cue success delta-AIC model failed for %s: %s', responseName, ME.message);
-    end
+    % CueSuccessVE testing intentionally removed.
+    % Final inference is restricted to OutcomeRPE and CueVE only.
 
-    sig_best = deltaAIC_best > 0 & pLRT_best < 0.05;
-    TDdataGradients.neuralFit(chz).deltaAIC_comparison = table(comparisonNames,deltaLL_best,deltaAIC_best,LRTstat_best,dfLRT_best,pLRT_best,nObs_best,sig_best,...
-        'VariableNames',{'Comparison','DeltaLL','DeltaAIC','LRTstat','dfLRT','pLRT','nObs','Significant'});
-    TDdataGradients.neuralFit(chz).sigDeltaAIC_any = any(sig_best);
+    % Planned within-channel correction only.
+    % No correction is applied across channels or merged regions.
+    % Holm-Bonferroni is applied only across the two planned tests inside
+    % this channel: OutcomeRPE and CueVE.
+    channelPalpha = 0.05;
+    validHolm = isfinite(pPerm_best);
+    if any(validHolm)
+        validIdxHolm = find(validHolm);
+        [pSortedHolm,sortIdxHolm] = sort(pPerm_best(validHolm));
+        mHolm = numel(pSortedHolm);
+        adjSortedHolm = pSortedHolm .* (mHolm:-1:1)';
+        adjSortedHolm = cummax(adjSortedHolm);
+        adjSortedHolm(adjSortedHolm > 1) = 1;
+        pHolmWithinChannel_best(validIdxHolm(sortIdxHolm)) = adjSortedHolm;
+    end
+    sig_best = deltaAIC_best > 0 & pHolmWithinChannel_best < channelPalpha;
+
+    TDdataGradients.neuralFit(chz).deltaAIC_comparison = table(comparisonNames,deltaLL_best,deltaAIC_best,LRTstat_best,dfLRT_best,pLRT_best,pPerm_best,pHolmWithinChannel_best,nObs_best,sig_best,...
+        'VariableNames',{'Comparison','DeltaLL','DeltaAIC','LRTstat','dfLRT','pLRT','pPerm','pHolmWithinChannel','nObs','Significant'});
+    TDdataGradients.neuralFit(chz).permDeltaAIC = permDeltaAIC_best;
+    TDdataGradients.neuralFit(chz).sigDeltaAIC_any = false;
 
     % saving figures for significant models
     % if (TDdata.neuralFit(chz).rstdExpectationModelPOPCTRL.anova{end,end}<0.05 || TDdata.neuralFit(chz).rstdSurpriseModelPOPCTRL.anova{end,end}<0.05)
@@ -874,96 +881,95 @@ for chz = nChannels:-1:1
         saveas(chz*1000,pdfPath)
         close(chz*1000)
 
-        % Figure 2: only for significant best-alpha latent effects.
-        keepIdx = strcmpi(comparisonNames,'OutcomeRPE') | strcmpi(comparisonNames,'CueVE');
-        
-        deltaAIC_plot = deltaAIC_best(keepIdx);
-        pLRT_plot     = pLRT_best(keepIdx);
-        sig_plot      = sig_best(keepIdx);
-        names_plot    = comparisonNames(keepIdx);
-        
-        if any(sig_plot)
-            figID = chz*1000 + 1;
-            if ishandle(figID); close(figID); end
-            figure(figID)
-        
-            bar(deltaAIC_plot, 0.45)   % narrower bars
-            hold on
-            yline(0,'--k','LineWidth',1)
-        
-            for jj = 1:numel(deltaAIC_plot)
-                if isfinite(deltaAIC_plot(jj)) && isfinite(pLRT_plot(jj))
-                    text(jj, 0.05, sprintf('p=%.3g',pLRT_plot(jj)), ...
-                        'HorizontalAlignment','center', ...
-                        'VerticalAlignment','bottom', ...
-                        'Rotation',0)
-                end
+        % Figure 2: save the corrected best-alpha channel result now, in the
+        % same channel loop, so every channel gets two PDFs at the same time.
+        figID = chz*1000 + 1;
+        if ishandle(figID); close(figID); end
+        figure(figID)
+        bar(deltaAIC_best,0.55)
+        hold on
+        yline(0,'--k','LineWidth',1)
+        for jj = 1:numel(deltaAIC_best)
+            if isfinite(deltaAIC_best(jj)) && isfinite(pHolmWithinChannel_best(jj))
+                text(jj,deltaAIC_best(jj),sprintf('p=%.3g',pHolmWithinChannel_best(jj)),...
+                    'HorizontalAlignment','center',...
+                    'VerticalAlignment','bottom',...
+                    'Rotation',45)
             end
-        
-            hold off
-        
-            set(gca,'XTick',1:numel(names_plot),'XTickLabel',names_plot)
-            xtickangle(30)
-        
-            ylabel('\DeltaAIC = baseline AIC - full AIC')
-            title(sprintf('%s %s OutcomeRPE and CueVE', ...
-                ptID, TDdataGradients.neuralFit(chz).trodeLabel), ...
-                'Interpreter','none')
-        
-            box off   % removes top and right borders
-            axis square
-        
-            pdfName = [ptID '_' TDdataGradients.neuralFit(chz).trodeLabel '_' ...
-                       TDdataGradients.neuralFit(chz).new_trodeLabel ...
-                       '_DeltaAIC_OutcomeRPE_CueVE.pdf'];
-        
-            pdfPath = fullfile(pdfDir, pdfName);
-        
-            set(gcf,'Name',pdfName,'NumberTitle','off')
-            saveas(figID,pdfPath)
-            close(figID)
+            if sig_best(jj)
+                text(jj,deltaAIC_best(jj),'*',...
+                    'HorizontalAlignment','center',...
+                    'VerticalAlignment','top',...
+                    'FontSize',18)
+            end
         end
+        hold off
+        set(gca,'XTick',1:numel(comparisonNames),'XTickLabel',comparisonNames)
+        xtickangle(30)
+        ylabel('\DeltaAIC = baseline AIC - full AIC')
+        title(sprintf('%s %s significant latent effects',...
+            ptID, TDdataGradients.neuralFit(chz).trodeLabel),...
+            'Interpreter','none')
+        box off
+        axis square
+
+        pdfName = [ptID '_' TDdataGradients.neuralFit(chz).trodeLabel '_' ...
+                   TDdataGradients.neuralFit(chz).new_trodeLabel '_RSTD_bestAlpha_test.pdf'];
+        pdfPath = fullfile(pdfDir, pdfName);
+        set(gcf,'Name',pdfName,'NumberTitle','off')
+        saveas(figID,pdfPath)
+        close(figID)
 
     end % if plot
 
 end % for chans
 
-% Summarize best-alpha DeltaAIC / LRT results across channels.
+% Summarize best-alpha DeltaAIC / permutation results across channels.
 summaryRows = {};
 for chSummary = 1:nChannels
     if isfield(TDdataGradients.neuralFit(chSummary),'deltaAIC_comparison') && ~isempty(TDdataGradients.neuralFit(chSummary).deltaAIC_comparison)
         tmpComp = TDdataGradients.neuralFit(chSummary).deltaAIC_comparison;
         for rr = 1:height(tmpComp)
-            summaryRows(end+1,:) = {ptID,...
-                                    chSummary,...
-                                    TDdataGradients.neuralFit(chSummary).trodeLabel,...
-                                    TDdataGradients.neuralFit(chSummary).new_trodeLabel,...
-                                    tmpComp.Comparison{rr},...
-                                    tmpComp.DeltaLL(rr),...
-                                    tmpComp.DeltaAIC(rr),...
-                                    tmpComp.LRTstat(rr),...
-                                    tmpComp.dfLRT(rr),...
-                                    tmpComp.pLRT(rr),...
-                                    tmpComp.nObs(rr),...
-                                    tmpComp.Significant(rr)}; %#ok<AGROW>
+            if tmpComp.Significant(rr)
+                summaryRows(end+1,:) = {ptID,...
+                                        chSummary,...
+                                        TDdataGradients.neuralFit(chSummary).trodeLabel,...
+                                        TDdataGradients.neuralFit(chSummary).new_trodeLabel,...
+                                        tmpComp.Comparison{rr},...
+                                        tmpComp.DeltaLL(rr),...
+                                        tmpComp.DeltaAIC(rr),...
+                                        tmpComp.LRTstat(rr),...
+                                        tmpComp.dfLRT(rr),...
+                                        tmpComp.pLRT(rr),...
+                                        tmpComp.pPerm(rr),...
+                                        tmpComp.pHolmWithinChannel(rr),...
+                                        tmpComp.nObs(rr),...
+                                        tmpComp.Significant(rr)};
+            end
         end
     end
 end
 
 if ~isempty(summaryRows)
     TDdataGradients.deltaAICSummary = cell2table(summaryRows,...
-        'VariableNames',{'PatientID','ChannelIndex','TrodeLabel','RegionLabel','Comparison','DeltaLL','DeltaAIC','LRTstat','dfLRT','pLRT','nObs','Significant'});
+        'VariableNames',{'PatientID','ChannelIndex','TrodeLabel','RegionLabel','Comparison','DeltaLL','DeltaAIC','LRTstat','dfLRT','pLRT','pPerm','pHolmWithinChannel','nObs','Significant'});
+
+    % No merged-area / region-level testing here. No q-values are saved.
+    % The CSV contains only significant rows based on Holm-corrected p-values within each channel.
+    TDdataGradients.regionDeltaAICSummary = table();
+
     pdfDir = '\\155.100.91.44\d\Data\Rhiannon\BART_RLDM_outputs\RSTD\RSTD_neuralFits\';
     if ~exist(pdfDir,'dir')
         mkdir(pdfDir);
     end
     try
-        writetable(TDdataGradients.deltaAICSummary,fullfile(pdfDir,[ptID '_DeltaAIC_LRT_summary.csv']));
+        writetable(TDdataGradients.deltaAICSummary,fullfile(pdfDir,[ptID '_DeltaAIC_withinChannelHolm_significantOnly.csv']));
     catch ME
-        warning('Could not write DeltaAIC summary CSV for %s: %s',ptID,ME.message);
+        warning('Could not write DeltaAIC within-channel Holm significant-only summary CSV for %s: %s',ptID,ME.message);
     end
 else
     TDdataGradients.deltaAICSummary = table();
+    TDdataGradients.regionDeltaAICSummary = table();
 end
 
 % learning rate gradients

@@ -37,13 +37,13 @@ noWMpts = {};
 % looping over patients
 %ptArray = {'202003'} %for debugging
 nPts = length(ptArray);
-
+% disp(nPts);
 %TODO:: removing patients without EEG for EEG batch analyses
 set(0,'defaultfigurerenderer','painters')
 
 % Only those patients who have EEG or micros.
 % pts = 1:nPts; 
-pts = 1:2; 
+pts = 4:nPts; 
 % 26-71 Mark's computer 
 % 1-25 Rhiannon's computer
  
